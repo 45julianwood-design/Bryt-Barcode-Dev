@@ -1,0 +1,7 @@
+{
+  "name": "Bryt Barcode Dev",
+  "description": "Professional tool for scanning and generating PDF417 AAMVA driver's license barcodes and linear barcodes with full field customization.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
