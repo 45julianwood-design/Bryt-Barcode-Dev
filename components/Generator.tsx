@@ -1,110 +1,100 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import bwipjs from 'bwip-js';
-import { GoogleGenAI, Type } from "@google/genai";
-import { AamvaData, DEFAULT_AAMVA_DATA, BarcodeType } from '../types';
-import { buildAamvaString } from '../services/aamvaParser';
+import { GoogleGenAI } from "@google/genai";
+import { BarcodeType } from '../types';
+
+declare global {
+  interface AIStudio {
+    hasSelectedApiKey: () => Promise<boolean>;
+    openSelectKey: () => Promise<void>;
+  }
+  interface Window {
+    aistudio?: AIStudio;
+  }
+}
+
+const AAMVA_TEMPLATE = `@\nANSI 636015090002DL00410268ZT03090007\nDLDACHenry\nDCSMiller\nDBA12312030\nDBB01011990\nDBC1\nDAU070 in\nDAW180`;
+const HUMAN_TEMPLATE = `First Name: HENRY\nLast Name: MILLER\nDOB: 01/01/1990\nSEX: MALE\nHT: 5-10\nWT: 180 lb`;
 
 const Generator: React.FC = () => {
-  const [data, setData] = useState<AamvaData>(DEFAULT_AAMVA_DATA);
   const [barcodeType, setBarcodeType] = useState<BarcodeType>('PDF417');
-  const [linearContent, setLinearContent] = useState('123456789');
   const [rawTextInput, setRawTextInput] = useState('');
+  const [encodedContent, setEncodedContent] = useState(AAMVA_TEMPLATE);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [copied, setCopied] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const generateBarcode = () => {
-    if (!canvasRef.current) return;
-
-    const content = barcodeType === 'PDF417' ? buildAamvaString(data) : linearContent;
+    if (!canvasRef.current || !encodedContent) return;
 
     try {
       bwipjs.toCanvas(canvasRef.current, {
         bcid: barcodeType.toLowerCase(),
-        text: content,
+        text: encodedContent,
         scale: 2,
-        height: barcodeType === 'PDF417' ? 15 : 10,
+        height: barcodeType === 'PDF417' ? 12 : 10,
         includetext: barcodeType !== 'PDF417',
         textxalign: 'center',
-        backgroundcolor: 'ffffff', // White background
-        barcolor: '000000',        // Black bars
+        backgroundcolor: 'FFFFFF',
+        barcolor: '000000',
+        paddingwidth: 10,
+        paddingheight: 10,
       });
     } catch (e) {
-      console.error(e);
+      console.error("Barcode generation error:", e);
+      const ctx = canvasRef.current.getContext('2d');
+      if (ctx) {
+        ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+        ctx.fillStyle = "#FEE2E2";
+        ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+        ctx.fillStyle = "#991B1B";
+        ctx.font = "bold 12px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("DATA ERROR: CHECK INPUT", canvasRef.current.width / 2, 40);
+      }
     }
   };
 
   useEffect(() => {
     generateBarcode();
-  }, [data, barcodeType, linearContent]);
+  }, [encodedContent, barcodeType]);
 
-  const handleChange = (field: keyof AamvaData, value: string) => {
-    setData(prev => ({ ...prev, [field]: value }));
-  };
-
-  const handleAiFill = async () => {
+  const handleAiFormat = async () => {
     if (!rawTextInput.trim()) return;
     setIsProcessing(true);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: (process as any).env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
-        contents: `Extract driver's license details from this text: "${rawTextInput}". 
-        Ensure dates are in MMDDYYYY format. Sex should be "male", "female", or the value provided. 
-        Height should be like "070 in". Weight should be numeric string.`,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              vehicleClass: { type: Type.STRING },
-              restrictionCode: { type: Type.STRING },
-              endorsementsCode: { type: Type.STRING },
-              expirationDate: { type: Type.STRING, description: "Format: MMDDYYYY" },
-              lastName: { type: Type.STRING },
-              familyNameTruncation: { type: Type.STRING },
-              firstName: { type: Type.STRING },
-              firstNameTruncation: { type: Type.STRING },
-              middleName: { type: Type.STRING },
-              middleNameTruncation: { type: Type.STRING },
-              issuedDate: { type: Type.STRING, description: "Format: MMDDYYYY" },
-              birthDate: { type: Type.STRING, description: "Format: MMDDYYYY" },
-              sex: { type: Type.STRING },
-              eyeColor: { type: Type.STRING },
-              height: { type: Type.STRING },
-              street_1: { type: Type.STRING },
-              city: { type: Type.STRING },
-              jurisdictionCode: { type: Type.STRING },
-              postalCode: { type: Type.STRING },
-              licenseNumber: { type: Type.STRING },
-              documentDiscriminator: { type: Type.STRING },
-              issuingCountry: { type: Type.STRING },
-              hairColor: { type: Type.STRING },
-              inventoryControlNumber: { type: Type.STRING },
-              race: { type: Type.STRING },
-              complianceType: { type: Type.STRING },
-              cardRevisionDate: { type: Type.STRING, description: "Format: MMDDYYYY" },
-              weightInPounds: { type: Type.STRING },
-              organDonor: { type: Type.STRING, description: "Y or N" },
-            }
-          }
-        },
+        contents: `Convert the following human details into a raw, valid AAMVA driver's license barcode string (starting with @ and ANSI 636...).
+        If details are missing, use plausible standard defaults for the AAMVA v2020 format.
+        Details: "${rawTextInput}".
+        Output ONLY the resulting raw string, no explanation.`,
       });
 
-      const result = JSON.parse(response.text || '{}');
-      // Merge with default data to handle missing fields
-      setData(prev => ({
-        ...prev,
-        ...result
-      }));
-      setBarcodeType('PDF417');
-    } catch (error) {
+      const result = response.text?.trim() || '';
+      if (result) {
+        setEncodedContent(result);
+        setBarcodeType('PDF417');
+      }
+    } catch (error: any) {
       console.error("AI processing failed:", error);
-      alert("Failed to parse text. Please check your input or try again.");
+      if (error.message?.includes("403") || error.message?.includes("entity was not found")) {
+        window.aistudio?.openSelectKey();
+      }
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(encodedContent);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {}
   };
 
   const downloadBarcode = () => {
@@ -112,139 +102,185 @@ const Generator: React.FC = () => {
     if (!canvas) return;
     const link = document.createElement('a');
     link.download = `barcode-${barcodeType}-${Date.now()}.png`;
-    link.href = canvas.toDataURL();
+    link.href = canvas.toDataURL('image/png');
     link.click();
   };
 
   return (
     <div className="flex flex-col lg:flex-row gap-8">
-      {/* Configuration Section */}
+      {/* Editor Surface */}
       <div className="flex-1 space-y-6">
-        {/* AI Quick Fill Section */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-indigo-700 flex items-center gap-2">
-              <i className="fas fa-magic"></i> AI Quick Fill
-            </h3>
-            <span className="text-[10px] bg-indigo-100 text-indigo-600 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide">
-              Gemini Powered
-            </span>
+        
+        {/* Encoding Terminal */}
+        <div className="bg-white rounded-3xl shadow-sm border border-gray-200 overflow-hidden transition-all hover:shadow-md">
+          <div className="p-6 border-b border-gray-100 bg-gray-50/50 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+               <div className="bg-indigo-600 p-2 rounded-xl">
+                  <i className="fas fa-keyboard text-white text-xs"></i>
+               </div>
+               <div>
+                  <h3 className="text-sm font-black text-gray-800 uppercase tracking-widest">Exact Data Terminal</h3>
+                  <p className="text-[10px] text-gray-400 font-bold uppercase tracking-tighter">1:1 Byte Encoding Engine</p>
+               </div>
+            </div>
+            <div className="flex gap-2">
+               <button 
+                onClick={() => setEncodedContent(AAMVA_TEMPLATE)}
+                className="text-[9px] font-black text-indigo-600 hover:text-indigo-800 uppercase px-2 py-1 bg-white border border-gray-200 rounded-lg shadow-sm"
+               >
+                AAMVA Template
+               </button>
+               <button 
+                onClick={() => setEncodedContent(HUMAN_TEMPLATE)}
+                className="text-[9px] font-black text-purple-600 hover:text-purple-800 uppercase px-2 py-1 bg-white border border-gray-200 rounded-lg shadow-sm"
+               >
+                Human Template
+               </button>
+            </div>
           </div>
-          <p className="text-xs text-gray-500 mb-3">Paste raw human details (name, DOB, address, etc.) to automatically populate fields.</p>
-          <textarea
-            value={rawTextInput}
-            onChange={(e) => setRawTextInput(e.target.value)}
-            placeholder="e.g. John Smith, born Jan 1st 1990, lives at 742 Evergreen Terrace, Springfield..."
-            className="w-full h-24 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none resize-none bg-gray-50 focus:bg-white transition-all"
-          />
-          <button
-            onClick={handleAiFill}
-            disabled={isProcessing || !rawTextInput.trim()}
-            className={`mt-3 w-full flex items-center justify-center gap-2 py-2 rounded-lg font-semibold transition-all ${
-              isProcessing || !rawTextInput.trim()
-                ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                : 'bg-indigo-600 text-white hover:bg-indigo-700 active:scale-[0.98] shadow-md hover:shadow-lg'
-            }`}
-          >
-            {isProcessing ? (
-              <>
-                <i className="fas fa-spinner fa-spin"></i>
-                Analyzing Details...
-              </>
-            ) : (
-              <>
-                <i className="fas fa-wand-sparkles"></i>
-                Parse & Generate
-              </>
-            )}
-          </button>
+          
+          <div className="p-6">
+            <div className="relative group">
+               <textarea
+                value={encodedContent}
+                onChange={(e) => setEncodedContent(e.target.value)}
+                className="w-full h-96 p-6 font-mono text-sm bg-gray-950 text-emerald-400 rounded-2xl focus:ring-4 focus:ring-indigo-500/10 outline-none resize-none shadow-2xl leading-relaxed custom-scrollbar border-2 border-gray-900 focus:border-indigo-500 transition-all placeholder:text-gray-700"
+                placeholder="Paste raw string or type details here..."
+              />
+              <div className="absolute top-4 right-4 flex gap-2">
+                 <button 
+                  onClick={() => setEncodedContent('')}
+                  className="bg-gray-800/50 backdrop-blur hover:bg-red-900 text-gray-400 hover:text-white px-3 py-1.5 rounded-lg text-[9px] font-black uppercase transition-colors border border-white/5"
+                 >
+                  Wipe Data
+                 </button>
+              </div>
+            </div>
+            <div className="mt-4 flex items-center justify-between">
+               <p className="text-[11px] text-gray-400 italic">
+                 Note: Every newline and space typed in the box above will be encoded exactly into the barcode.
+               </p>
+               <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <span className="text-[10px] font-black text-emerald-600 uppercase">Live Buffer Ready</span>
+               </div>
+            </div>
+          </div>
         </div>
 
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-          <h3 className="text-lg font-semibold mb-4 text-indigo-700">Type Selection</h3>
-          <div className="grid grid-cols-2 gap-4">
-            {(['PDF417', 'CODE128', 'CODE39', 'EAN13'] as BarcodeType[]).map(type => (
-              <button
-                key={type}
-                onClick={() => setBarcodeType(type)}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  barcodeType === type
-                    ? 'bg-indigo-600 text-white shadow-md'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {barcodeType === 'PDF417' ? (
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-            <h3 className="text-lg font-semibold mb-4 text-indigo-700">AAMVA Details</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {Object.keys(DEFAULT_AAMVA_DATA).map((key) => (
-                <div key={key}>
-                  <label className="block text-xs font-bold text-gray-500 uppercase mb-1">
-                    {key.replace(/([A-Z])/g, ' $1').trim()}
-                  </label>
-                  <input
-                    type="text"
-                    value={(data as any)[key]}
-                    onChange={(e) => handleChange(key as keyof AamvaData, e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                  />
+        {/* AI Formatting Assistant */}
+        <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-8 rounded-3xl shadow-2xl shadow-indigo-200 text-white relative overflow-hidden group">
+           <div className="absolute -right-10 -bottom-10 opacity-10 transform rotate-12 group-hover:scale-110 transition-transform duration-700">
+              <i className="fas fa-id-card text-9xl"></i>
+           </div>
+           
+           <div className="relative z-10">
+              <div className="flex items-center gap-4 mb-6">
+                <div className="bg-white/20 backdrop-blur-md p-3 rounded-2xl border border-white/30">
+                   <i className="fas fa-wand-magic-sparkles text-xl"></i>
                 </div>
+                <div>
+                   <h3 className="text-lg font-black uppercase tracking-widest">AAMVA Detail Assistant</h3>
+                   <p className="text-xs text-indigo-100 font-medium">Auto-format human readable details into raw barcode blobs</p>
+                </div>
+              </div>
+
+              <div className="flex gap-4">
+                 <div className="flex-1 relative">
+                    <input
+                      type="text"
+                      value={rawTextInput}
+                      onChange={(e) => setRawTextInput(e.target.value)}
+                      placeholder="e.g. John Smith, DOB 05/12/1985, Male, Texas..."
+                      className="w-full px-5 py-4 bg-white/10 backdrop-blur-xl border border-white/20 rounded-2xl text-sm outline-none focus:ring-4 focus:ring-white/20 transition-all placeholder:text-indigo-200"
+                    />
+                 </div>
+                 <button
+                   onClick={handleAiFormat}
+                   disabled={isProcessing || !rawTextInput}
+                   className="px-8 bg-white text-indigo-600 rounded-2xl text-xs font-black hover:bg-indigo-50 disabled:bg-white/30 disabled:text-white/50 transition-all shadow-xl uppercase tracking-widest flex items-center gap-3 active:scale-95"
+                 >
+                   {isProcessing ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-sparkles"></i>}
+                   Format
+                 </button>
+              </div>
+           </div>
+        </div>
+      </div>
+
+      {/* Output & Diagnostics */}
+      <div className="lg:w-96 space-y-6">
+        <div className="sticky top-24">
+          
+          {/* Symbology Choice */}
+          <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-200">
+            <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Target Symbology</h4>
+            <div className="grid grid-cols-2 gap-2">
+              {(['PDF417', 'CODE128', 'CODE39', 'EAN13'] as BarcodeType[]).map(type => (
+                <button
+                  key={type}
+                  onClick={() => setBarcodeType(type)}
+                  className={`px-3 py-3 rounded-xl text-[10px] font-black transition-all border-2 ${
+                    barcodeType === type
+                      ? 'bg-indigo-600 text-white border-indigo-700 shadow-xl'
+                      : 'bg-gray-50 text-gray-600 border-gray-100 hover:border-indigo-300'
+                  }`}
+                >
+                  {type}
+                </button>
               ))}
             </div>
           </div>
-        ) : (
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-            <h3 className="text-lg font-semibold mb-4 text-indigo-700">Linear Content</h3>
-            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Data String</label>
-            <input
-              type="text"
-              value={linearContent}
-              onChange={(e) => setLinearContent(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-            />
-          </div>
-        )}
-      </div>
 
-      {/* Preview Section */}
-      <div className="lg:w-1/3 space-y-6">
-        <div className="sticky top-20">
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col items-center">
-            <h3 className="text-lg font-semibold mb-6 text-gray-700 self-start">Barcode Preview</h3>
-            <div className="bg-white p-4 rounded-lg border flex items-center justify-center min-h-[200px] w-full mb-6 shadow-inner overflow-hidden">
-              <canvas ref={canvasRef}></canvas>
+          {/* Barcode Output Preview */}
+          <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-200 mt-6 flex flex-col items-center">
+            <div className="flex justify-between w-full mb-6 items-center">
+               <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Final Generator Result</h4>
+               <div className="flex items-center gap-1.5 bg-indigo-50 px-2 py-1 rounded-lg">
+                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-600"></span>
+                  <span className="text-[9px] font-black text-indigo-600 uppercase">{barcodeType}</span>
+               </div>
             </div>
+            
+            <div className="bg-white p-10 rounded-3xl border-2 border-gray-50 w-full flex items-center justify-center min-h-[240px] shadow-inner mb-6 overflow-hidden">
+              <canvas ref={canvasRef} className="max-w-full h-auto drop-shadow-2xl"></canvas>
+            </div>
+
             <button
               onClick={downloadBarcode}
-              className="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 transition-all hover:shadow-lg active:scale-95 flex items-center justify-center gap-2"
+              className="w-full bg-gray-900 text-white py-5 rounded-2xl font-black text-xs hover:bg-black transition-all shadow-2xl active:scale-95 flex items-center justify-center gap-3 uppercase tracking-widest"
             >
-              <i className="fas fa-download"></i>
-              Download Image
+              <i className="fas fa-file-arrow-down"></i>
+              Export Scannable PNG
             </button>
           </div>
 
-          <div className="mt-6 bg-indigo-50 p-4 rounded-xl border border-indigo-100">
-            <h4 className="text-sm font-bold text-indigo-800 mb-2">Technical Summary</h4>
-            <p className="text-xs text-indigo-600 leading-relaxed">
-              Format: <span className="font-mono">{barcodeType}</span><br/>
-              Characters: {barcodeType === 'PDF417' ? buildAamvaString(data).length : linearContent.length}<br/>
-              Standard: {barcodeType === 'PDF417' ? 'AAMVA DL/ID 2020' : 'ISO/IEC Standard'}
-            </p>
-            {barcodeType === 'PDF417' && (
-              <div className="mt-3 pt-3 border-t border-indigo-100">
-                <label className="block text-[10px] font-bold text-indigo-400 uppercase mb-1">Generated AAMVA String</label>
-                <div className="bg-white p-2 rounded border border-indigo-100 text-[10px] font-mono break-all line-clamp-3 select-all">
-                  {buildAamvaString(data)}
+          {/* Diagnostic Feed */}
+          <div className="mt-6 bg-gray-900 p-6 rounded-3xl shadow-2xl shadow-indigo-200/20">
+             <div className="flex justify-between items-center mb-6">
+                <span className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">Buffer Diagnostics</span>
+                <button 
+                  onClick={handleCopy}
+                  className={`px-3 py-1.5 rounded-xl text-[9px] font-black uppercase transition-all shadow-lg ${copied ? 'bg-green-500 text-white' : 'bg-white/10 text-gray-300 hover:bg-white/20'}`}
+                >
+                  {copied ? 'Copied' : 'Copy Content'}
+                </button>
+             </div>
+             <div className="grid grid-cols-2 gap-4">
+                <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
+                   <p className="text-[8px] font-black text-gray-500 uppercase mb-1">Payload Size</p>
+                   <p className="text-xl font-black text-white font-mono">{encodedContent.length} <span className="text-[10px] text-gray-500">B</span></p>
                 </div>
-              </div>
-            )}
+                <div className="bg-white/5 p-4 rounded-2xl border border-white/5">
+                   <p className="text-[8px] font-black text-gray-500 uppercase mb-1">Symbology</p>
+                   <p className="text-xl font-black text-indigo-400 font-mono">{barcodeType.replace(/\d+/g, '')}</p>
+                </div>
+             </div>
+             <div className="mt-4 p-3 bg-indigo-950/30 rounded-xl border border-indigo-500/20 text-[9px] font-medium text-indigo-300/60 leading-tight">
+                This engine uses high-precision BWIP-JS rendering to ensure 100% data fidelity for AAMVA and high-density PDF417 modules.
+             </div>
           </div>
+
         </div>
       </div>
     </div>
