@@ -12,7 +12,7 @@ export interface AamvaData {
   middleNameTruncation: string;
   issuedDate: string; // MMDDYYYY
   birthDate: string; // MMDDYYYY
-  sex: string; // 1=Male, 2=Female (standard AAMVA uses numeric or codes)
+  sex: string; // 1=Male, 2=Female
   eyeColor: string;
   height: string;
   street_1: string;
@@ -28,6 +28,7 @@ export interface AamvaData {
   complianceType: string;
   cardRevisionDate: string;
   weightInPounds: string;
+  organDonor: string; // Y or N
 }
 
 export const DEFAULT_AAMVA_DATA: AamvaData = {
@@ -58,7 +59,8 @@ export const DEFAULT_AAMVA_DATA: AamvaData = {
   race: 'W',
   complianceType: 'F',
   cardRevisionDate: '07162021',
-  weightInPounds: '167'
+  weightInPounds: '167',
+  organDonor: 'Y'
 };
 
 export type BarcodeType = 'PDF417' | 'CODE128' | 'CODE39' | 'EAN13';

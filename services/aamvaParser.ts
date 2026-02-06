@@ -32,7 +32,8 @@ const AAMVA_MAP: Record<string, keyof AamvaData> = {
   'DCL': 'race',
   'DDA': 'complianceType',
   'DDB': 'cardRevisionDate',
-  'DAW': 'weightInPounds'
+  'DAW': 'weightInPounds',
+  'DSH': 'organDonor'
 };
 
 const REV_MAP: Record<keyof AamvaData, string> = Object.fromEntries(
@@ -43,11 +44,9 @@ export function parseAamva(raw: string): Partial<AamvaData> {
   const result: Partial<AamvaData> = {};
   
   // Basic split by newlines as often AAMVA segments are line-delimited or chunked
-  // Real AAMVA parsing is complex; this handles common formats where tags are followed by values
   const lines = raw.replace(/\r/g, '').split('\n');
   
   lines.forEach(line => {
-    // Search for 3-letter keys at start of lines or segments
     for (const [key, field] of Object.entries(AAMVA_MAP)) {
       if (line.includes(key)) {
         const value = line.split(key)[1]?.trim();
@@ -60,11 +59,7 @@ export function parseAamva(raw: string): Partial<AamvaData> {
 }
 
 export function buildAamvaString(data: AamvaData): string {
-  // AAMVA Structure:
-  // Header: @ + LF + ANSI + IIN + Version + JurisdictionVersion + NumberOfEntries
-  // Subfile Designator: DL + Offset + Length
-  // Subfile: DL + Data
-  
+  // AAMVA Structure
   const header = '@\nANSI 636015090002DL00410268ZT03090007';
   
   const dlSegment = [
@@ -73,7 +68,7 @@ export function buildAamvaString(data: AamvaData): string {
     `${REV_MAP.endorsementsCode}${data.endorsementsCode}`,
     `${REV_MAP.expirationDate}${data.expirationDate}`,
     `${REV_MAP.lastName}${data.lastName}`,
-    `DDE${data.familyNameTruncation}`, // Specific field from user sample
+    `DDE${data.familyNameTruncation}`,
     `${REV_MAP.firstName}${data.firstName}`,
     `DDF${data.firstNameTruncation}`,
     `${REV_MAP.middleName}${data.middleName}`,
@@ -85,7 +80,7 @@ export function buildAamvaString(data: AamvaData): string {
     `${REV_MAP.height}${data.height}`,
     `${REV_MAP.street_1}${data.street_1}`,
     `${REV_MAP.city}${data.city}`,
-    `${REV_MAP.jurisdictionCode}${data.jurisdictionCode.substring(0,2).toUpperCase()}`, // State code usually 2 chars
+    `${REV_MAP.jurisdictionCode}${data.jurisdictionCode.substring(0,2).toUpperCase()}`,
     `${REV_MAP.postalCode}${data.postalCode}`,
     `${REV_MAP.licenseNumber}${data.licenseNumber}`,
     `${REV_MAP.documentDiscriminator}${data.documentDiscriminator}`,
@@ -96,6 +91,7 @@ export function buildAamvaString(data: AamvaData): string {
     `${REV_MAP.complianceType}${data.complianceType}`,
     `${REV_MAP.cardRevisionDate}${data.cardRevisionDate}`,
     `${REV_MAP.weightInPounds}${data.weightInPounds}`,
+    `${REV_MAP.organDonor}${data.organDonor}`,
   ].join('\n');
 
   return `${header}\n${dlSegment}`;
